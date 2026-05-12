@@ -1,6 +1,6 @@
 ;========================================
-; STC89C52 + HC-05 蓝牙串口通信
-; 晶振: 11.0592MHz  波特率: 9600
+; STC89C52 + HC-05 蓝牙串口通信（可直接用手机串口助手测试）
+; 晶振: 11.0592MHz  波特率: 9600 8N1
 ;========================================
 
 ORG     0000H
@@ -16,16 +16,21 @@ ORG     0030H
 MAIN:
     MOV     SP, #70H        ; 设置堆栈指针
 
+    ; === IO 初始化 ===
+    CLR     P1.0            ; 默认关闭 LED
+
     ; === 初始化串口 ===
     MOV     SCON, #50H      ; 串口模式1，允许接收(REN=1)
     MOV     TMOD, #20H      ; 定时器1，模式2(8位自动重装)
     MOV     TH1,  #0FDH     ; 波特率9600 @11.0592MHz
     MOV     TL1,  #0FDH
+    CLR     TI              ; 清发送标志
+    CLR     RI              ; 清接收标志
     SETB    TR1             ; 启动定时器1
 
     ; === 开中断 ===
-    SETB    EA              ; 开总中断
     SETB    ES              ; 开串口中断
+    SETB    EA              ; 开总中断
 
     ; === 上电发送欢迎语 ===
     MOV     DPTR, #STR_HELLO
@@ -61,27 +66,48 @@ SEND_STR_END:
 
 ;----------------------------------------
 ; 串口中断服务程序
-; 接收手机发来的数据，并回显
+; 接收手机发来的数据，并执行命令或回显
 ;----------------------------------------
 UART_ISR:
     PUSH    ACC
     PUSH    PSW
 
-    JNB     RI, ISR_END     ; 不是接收中断则跳过
+    JNB     RI, ISR_END     ; 仅处理接收中断
     CLR     RI              ; 清接收标志
     MOV     A, SBUF         ; 读取接收到的数据
 
-    ; === 在这里处理手机发来的指令 ===
-    ; 示例：收到 '1' 点亮P1.0，收到 '0' 熄灭
+    ; 收到 '1' 点亮 P1.0
     CJNE    A, #'1', CHECK0
     SETB    P1.0
+    MOV     A, #'O'
+    LCALL   SEND_BYTE
+    MOV     A, #'N'
+    LCALL   SEND_BYTE
+    MOV     A, #0DH
+    LCALL   SEND_BYTE
+    MOV     A, #0AH
+    LCALL   SEND_BYTE
     SJMP    ISR_END
+
 CHECK0:
+    ; 收到 '0' 熄灭 P1.0
     CJNE    A, #'0', ECHO
     CLR     P1.0
+    MOV     A, #'O'
+    LCALL   SEND_BYTE
+    MOV     A, #'F'
+    LCALL   SEND_BYTE
+    MOV     A, #'F'
+    LCALL   SEND_BYTE
+    MOV     A, #0DH
+    LCALL   SEND_BYTE
+    MOV     A, #0AH
+    LCALL   SEND_BYTE
     SJMP    ISR_END
+
 ECHO:
-    LCALL   SEND_BYTE       ; 其他字符回显给手机
+    ; 其他字符回显给手机
+    LCALL   SEND_BYTE
 
 ISR_END:
     POP     PSW
@@ -91,6 +117,6 @@ ISR_END:
 ;----------------------------------------
 ; 字符串数据
 ;----------------------------------------
-STR_HELLO:  DB  "Hello Phone!", 0DH, 0AH, 00H
+STR_HELLO:  DB  "HC-05 Ready. Send 1/0", 0DH, 0AH, 00H
 
 END
