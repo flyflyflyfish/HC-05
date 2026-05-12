@@ -9,6 +9,9 @@ LJMP    MAIN
 ORG     0023H           ; 串口中断入口
 LJMP    UART_ISR
 
+RX_FLAG EQU 20H         ; bit-addressable RAM bit
+RX_BYTE EQU 30H         ; 最近一次接收到的字节
+
 ;----------------------------------------
 ; 主程序
 ;----------------------------------------
@@ -26,6 +29,7 @@ MAIN:
     MOV     TL1,  #0FDH
     CLR     TI              ; 清发送标志
     CLR     RI              ; 清接收标志
+    CLR     RX_FLAG
     SETB    TR1             ; 启动定时器1
 
     ; === 开中断 ===
@@ -37,7 +41,31 @@ MAIN:
     LCALL   SEND_STR
 
 LOOP:
-    SJMP    LOOP            ; 主循环（业务逻辑加这里）
+    ; 在主循环里处理串口发送，避免在 ISR 里长时间阻塞
+    JNB     RX_FLAG, LOOP
+    CLR     RX_FLAG
+
+    MOV     A, RX_BYTE
+
+    ; 收到 '1' 点亮 P1.0，并回发 ON\r\n
+    CJNE    A, #'1', CHECK0
+    SETB    P1.0
+    MOV     DPTR, #STR_ON
+    LCALL   SEND_STR
+    SJMP    LOOP
+
+CHECK0:
+    ; 收到 '0' 熄灭 P1.0，并回发 OFF\r\n
+    CJNE    A, #'0', ECHO
+    CLR     P1.0
+    MOV     DPTR, #STR_OFF
+    LCALL   SEND_STR
+    SJMP    LOOP
+
+ECHO:
+    ; 其他字符直接回显
+    LCALL   SEND_BYTE
+    SJMP    LOOP
 
 ;----------------------------------------
 ; 发送单个字节
@@ -56,61 +84,30 @@ WAIT_TI:
 ;----------------------------------------
 SEND_STR:
     CLR     A
+SEND_STR_NEXT:
     MOVC    A, @A+DPTR      ; 取字符
     JZ      SEND_STR_END    ; 遇到0结束
     LCALL   SEND_BYTE
     INC     DPTR
-    SJMP    SEND_STR
+    CLR     A
+    SJMP    SEND_STR_NEXT
 SEND_STR_END:
     RET
 
 ;----------------------------------------
 ; 串口中断服务程序
-; 接收手机发来的数据，并执行命令或回显
+; 只负责“快收快退”，把收到的字节交给主循环处理
 ;----------------------------------------
 UART_ISR:
     PUSH    ACC
-    PUSH    PSW
 
-    JNB     RI, ISR_END     ; 仅处理接收中断
-    CLR     RI              ; 清接收标志
-    MOV     A, SBUF         ; 读取接收到的数据
-
-    ; 收到 '1' 点亮 P1.0
-    CJNE    A, #'1', CHECK0
-    SETB    P1.0
-    MOV     A, #'O'
-    LCALL   SEND_BYTE
-    MOV     A, #'N'
-    LCALL   SEND_BYTE
-    MOV     A, #0DH
-    LCALL   SEND_BYTE
-    MOV     A, #0AH
-    LCALL   SEND_BYTE
-    SJMP    ISR_END
-
-CHECK0:
-    ; 收到 '0' 熄灭 P1.0
-    CJNE    A, #'0', ECHO
-    CLR     P1.0
-    MOV     A, #'O'
-    LCALL   SEND_BYTE
-    MOV     A, #'F'
-    LCALL   SEND_BYTE
-    MOV     A, #'F'
-    LCALL   SEND_BYTE
-    MOV     A, #0DH
-    LCALL   SEND_BYTE
-    MOV     A, #0AH
-    LCALL   SEND_BYTE
-    SJMP    ISR_END
-
-ECHO:
-    ; 其他字符回显给手机
-    LCALL   SEND_BYTE
+    JNB     RI, ISR_END
+    MOV     A, SBUF         ; 先读数据
+    CLR     RI              ; 再清接收标志
+    MOV     RX_BYTE, A
+    SETB    RX_FLAG
 
 ISR_END:
-    POP     PSW
     POP     ACC
     RETI
 
@@ -118,5 +115,7 @@ ISR_END:
 ; 字符串数据
 ;----------------------------------------
 STR_HELLO:  DB  "HC-05 Ready. Send 1/0", 0DH, 0AH, 00H
+STR_ON:     DB  "ON", 0DH, 0AH, 00H
+STR_OFF:    DB  "OFF", 0DH, 0AH, 00H
 
 END
